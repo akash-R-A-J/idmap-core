@@ -948,9 +948,7 @@ This project is part of an open-source initiative for secure, decentralized Web3
 
 ### 🤝 Contributing
 
-Contributions are welcome! Please open issues or submit pull requests at:
-- **Issues:** [github.com/akash-R-A-J/idmap-core/issues](https://github.com/akash-R-A-J/idmap-core/issues)
-- **Pull Requests:** [github.com/akash-R-A-J/idmap-core/pulls](https://github.com/akash-R-A-J/idmap-core/pulls)
+Contributions are welcome! Please open issues or submit pull requests.
 
 ---
 
