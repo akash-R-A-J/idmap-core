@@ -109,7 +109,7 @@ pub async fn run_server() -> Result<()> {
     Ok(())
 }
 
-/// ✅ Handles DKG key generation requests.
+/// Handles DKG key generation requests.
 async fn run_dkg_server(
     redis_client: Arc<Client>,
     share_store: ShareStore,
@@ -140,7 +140,7 @@ async fn run_dkg_server(
         let session = parsed["session"].as_str().unwrap_or(default_session);
         info!("[DKG] Starting keygen session {}", session);
 
-        // ✅ Timeout for TCP accept (prevents hanging if no peer connects)
+        // Timeout for TCP accept (prevents hanging if no peer connects)
         let (socket, peer) = match timeout(Duration::from_secs(10), listener.accept()).await {
             Ok(Ok(s)) => s,
             Ok(Err(e)) => {
@@ -157,7 +157,7 @@ async fn run_dkg_server(
         };
         info!("[DKG] Connected to peer {:?}", peer);
 
-        // ✅ Timeout for DKG computation (prevents indefinite wait)
+        // Timeout for DKG computation (prevents indefinite wait)
         let shares = match timeout(
             Duration::from_secs(30),
             keygen::generate_private_share(socket, id, n, session.as_bytes()),
@@ -204,7 +204,7 @@ async fn run_dkg_server(
     Ok(())
 }
 
-/// ✅ Handles signing requests.
+/// Handles signing requests.
 async fn run_sign_server(
     redis_client: Arc<Client>,
     share_store: ShareStore,
@@ -247,7 +247,7 @@ async fn run_sign_server(
         let session = parsed["session"].as_str().unwrap_or(default_session);
         info!("[SIGN] Starting signing for session {}", session);
 
-        // ✅ Timeout for client connection
+        // Timeout for client connection
         let (socket, peer) = match timeout(Duration::from_secs(10), listener.accept()).await {
             Ok(Ok(s)) => s,
             Ok(Err(e)) => {
@@ -295,7 +295,7 @@ async fn run_sign_server(
             }
         };
 
-        // ✅ Timeout for signing phase itself
+        // Timeout for signing phase itself
         match timeout(
             Duration::from_secs(15),
             sign::run_signing_phase(id, valid_share, socket, message_bytes),
