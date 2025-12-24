@@ -8,9 +8,9 @@ use tracing_subscriber::fmt;
 #[tokio::main]
 async fn main() -> Result<()> {
     fmt()
-        .with_max_level(tracing::Level::INFO) // show info and above
-        .with_target(true) // include target (module path)
-        .with_thread_ids(true) // optional: include thread ids
+        .with_max_level(tracing::Level::INFO)
+        .with_target(true) 
+        .with_thread_ids(true)
         .init();
 
     // load the env variables
