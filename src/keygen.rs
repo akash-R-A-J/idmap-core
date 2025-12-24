@@ -63,7 +63,7 @@ pub async fn generate_private_share(
     Ok(valid_share)
 }
 
-/// 🚀 Helper: Airdrops `lamports` to the given Solana address (Devnet)
+/// Helper: Airdrops `lamports` to the given Solana address (Devnet)
 
 pub fn airdrop_funds(address: &str, lamports: u64) -> Result<Pubkey> {
     let rpc_endpoints = [
@@ -85,7 +85,7 @@ pub fn airdrop_funds(address: &str, lamports: u64) -> Result<Pubkey> {
                 Ok(sig) => match rpc.confirm_transaction(&sig) {
                     Ok(confirmed) if confirmed => {
                         info!(
-                            "✅ Airdrop successful via {} (attempt {}) — {} lamports sent to {}",
+                            "Airdrop successful via {} (attempt {}) — {} lamports sent to {}",
                             url, attempt, lamports, address
                         );
                         success = true;
