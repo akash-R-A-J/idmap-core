@@ -9,14 +9,18 @@ use tracing::{debug, error, info, warn};
 use ::redis::Client;
 use solana_sdk::signature::Signature;
 
+use anyhow::anyhow;
 use givre::generic_ec::curves::Ed25519;
 use givre::key_share::DirtyKeyShare;
 use givre::keygen::key_share::Valid;
+use serde_json::{Value, json};
 
+use dkg_tcp::auditor::decrypt::PartialDecryption;
+
+use dkg_tcp::auditor::decrypt::AuditorCiphertext;
+use dkg_tcp::auditor::{combine_partial_decryptions, partial_decrypt};
 use dkg_tcp::env::ServerEnv;
 use dkg_tcp::env::init_env;
-
-// use dkg_tcp::env::env_loader::init_env;
 use dkg_tcp::{keygen, sign};
 use dkg_tcp::{redis, store, tcp};
 
@@ -80,14 +84,27 @@ pub async fn run_server() -> Result<()> {
         let auditor_bind_addr = env.auditor_dkg_addr.clone();
 
         task::spawn(async move {
-            if let Err(e) = run_auditor_dkg_server(redis, auditor_store, id, auditor_bind_addr).await {
+            if let Err(e) =
+                run_auditor_dkg_server(redis, auditor_store, id, auditor_bind_addr).await
+            {
                 error!("[SERVER-AUDITOR] Error: {:?}", e);
             }
         })
     };
 
+    let auditor_decrypt_task = {
+        let redis = redis_client.clone();
+        let auditor_store = auditor_store.clone();
+
+        task::spawn(async move {
+            if let Err(e) = run_auditor_decrypt_server(redis, auditor_store, id).await {
+                error!("[SERVER-AUDITOR-DECRYPT] Error: {:?}", e);
+            }
+        })
+    };
+
     info!("[SERVER] Running DKG + SIGN servers concurrently...");
-    let _ = tokio::join!(dkg_task, sign_task, auditor_task);
+    let _ = tokio::join!(dkg_task, sign_task, auditor_task, auditor_decrypt_task);
     Ok(())
 }
 
@@ -254,14 +271,14 @@ async fn run_auditor_dkg_server(
         let keyshare = run_auditor_dkg(
             id,
             &auditor_bind_addr, // bind
-            "",                    // unused for node 0
+            "",                 // unused for node 0
         )
         .await?;
 
         auditor_store
             .write()
             .await
-            .insert(mint.to_string(), keyshare.share);
+            .insert(mint.to_string(), keyshare.clone());
 
         redis::publish(
             &mut pub_conn,
@@ -276,6 +293,93 @@ async fn run_auditor_dkg_server(
         .await?;
 
         info!("[AUDITOR] Auditor key generated for mint {}", mint);
+    }
+
+    Ok(())
+}
+
+async fn run_auditor_decrypt_server(
+    redis_client: Arc<Client>,
+    auditor_store: store::AuditorStore,
+    _id: u64,
+) -> Result<()> {
+    info!("[AUDITOR-DECRYPT] Subscribed");
+
+    // listen for decrypt requests
+    let (mut start_sub, _) = redis::subscribe(&redis_client, "auditor-decrypt-start").await?;
+
+    // listen for peer partials
+    let (mut partial_sub, mut pub_conn) =
+        redis::subscribe(&redis_client, "auditor-decrypt-partial").await?;
+
+    while let Some(msg) = start_sub.on_message().next().await {
+        let parsed: Value = redis::parse(&msg)?;
+
+        let mint = parsed["mint"]
+            .as_str()
+            .ok_or_else(|| anyhow!("missing mint"))?;
+
+        let ciphertext: AuditorCiphertext = serde_json::from_value(parsed["ciphertext"].clone())?;
+
+        // fetch auditor key share
+        let share = auditor_store
+            .read()
+            .await
+            .get(mint)
+            .cloned()
+            .ok_or_else(|| anyhow!("missing auditor share"))?;
+
+        // server partial
+        let my_partial = partial_decrypt(&share, &ciphertext)?;
+
+        redis::publish(
+            &mut pub_conn,
+            "auditor-decrypt-partial",
+            json!({
+                "mint": mint,
+                "node_id": 0,
+                "partial": my_partial,
+            }),
+        )
+        .await?;
+
+        let mut partials = vec![my_partial];
+
+        // wait for client partial (2-of-2)
+        while partials.len() < 2 {
+            let peer_msg = partial_sub
+                .on_message()
+                .next()
+                .await
+                .ok_or_else(|| anyhow!("peer disconnected"))?;
+
+            let peer: Value = redis::parse(&peer_msg)?;
+
+            if peer["mint"] != mint {
+                continue;
+            }
+
+            let p: PartialDecryption = serde_json::from_value(peer["partial"].clone())?;
+
+            partials.push(p);
+        }
+
+        // combine
+        let m_g = combine_partial_decryptions(&ciphertext, &partials)?;
+
+        redis::publish(
+            &mut pub_conn,
+            "auditor-decrypt-result",
+            json!({
+                "mint": mint,
+                "value_commitment": bs58::encode(
+                    m_g.compress().as_bytes()
+                ).into_string()
+            }),
+        )
+        .await?;
+
+        info!("[AUDITOR-DECRYPT] Decryption completed for mint {}", mint);
     }
 
     Ok(())

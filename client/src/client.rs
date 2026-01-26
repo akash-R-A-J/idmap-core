@@ -12,7 +12,9 @@ use givre::generic_ec::curves::Ed25519;
 use givre::key_share::DirtyKeyShare;
 use givre::keygen::key_share::Valid;
 
+use dkg_tcp::auditor::decrypt::AuditorCiphertext;
 use dkg_tcp::auditor::run_auditor_dkg;
+use dkg_tcp::auditor::{partial_decrypt};
 use dkg_tcp::env::ClientEnv;
 use dkg_tcp::{keygen, sign};
 use dkg_tcp::{redis, store, tcp};
@@ -74,8 +76,19 @@ pub async fn run_client() -> Result<()> {
         })
     };
 
+    let auditor_decrypt_task = {
+        let redis = redis_client.clone();
+        let auditor_store = auditor_store.clone();
+
+        task::spawn(async move {
+            if let Err(e) = run_auditor_decrypt_client(redis, auditor_store, id).await {
+                error!("[CLIENT-AUDITOR-DECRYPT] Error: {:?}", e);
+            }
+        })
+    };
+
     info!("[CLIENT] DKG + SIGN clients running concurrently...");
-    let _ = tokio::join!(dkg_task, sign_task, auditor_task);
+    let _ = tokio::join!(dkg_task, sign_task, auditor_task, auditor_decrypt_task);
     Ok(())
 }
 
@@ -212,11 +225,55 @@ async fn run_auditor_dkg_client(
         .await?;
 
         auditor_store
-            .write()
-            .await
-            .insert(mint.to_string(), keyshare.share);
+    .write()
+    .await
+    .insert(mint.to_string(), keyshare.clone());
 
         info!("[CLIENT-AUDITOR] Stored auditor share for mint {}", mint);
+    }
+
+    Ok(())
+}
+
+async fn run_auditor_decrypt_client(
+    redis_client: Arc<Client>,
+    auditor_store: store::AuditorStore,
+    id: u64,
+) -> Result<()> {
+    info!("[CLIENT-AUDITOR-DECRYPT] Subscribed to auditor-decrypt-start");
+
+    let (mut pubsub, mut pub_conn) =
+        redis::subscribe(&redis_client, "auditor-decrypt-start").await?;
+
+    while let Some(msg) = pubsub.on_message().next().await {
+        let parsed: serde_json::Value = redis::parse(&msg)?;
+
+        let mint = parsed["mint"].as_str().unwrap();
+        let ciphertext: AuditorCiphertext =
+            serde_json::from_value(parsed["ciphertext"].clone())?;
+
+        let share = {
+            let store = auditor_store.read().await;
+            store.get(mint).cloned()
+        };
+
+        let Some(share) = share else {
+            warn!("[AUDITOR-DECRYPT] No share for mint {}", mint);
+            continue;
+        };
+
+        let partial = partial_decrypt(&share, &ciphertext)?;
+
+        redis::publish(
+            &mut pub_conn,
+            "auditor-decrypt-partial",
+            serde_json::json!({
+                "id": parsed["id"],
+                "node_id": id,
+                "partial": partial,
+            }),
+        )
+        .await?;
     }
 
     Ok(())
