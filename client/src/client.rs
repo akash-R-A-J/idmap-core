@@ -12,6 +12,7 @@ use givre::generic_ec::curves::Ed25519;
 use givre::key_share::DirtyKeyShare;
 use givre::keygen::key_share::Valid;
 
+use dkg_tcp::auditor::run_auditor_dkg;
 use dkg_tcp::env::ClientEnv;
 use dkg_tcp::{keygen, sign};
 use dkg_tcp::{redis, store, tcp};
@@ -57,8 +58,24 @@ pub async fn run_client() -> Result<()> {
         })
     };
 
+    let auditor_store: store::AuditorStore = Arc::new(Default::default());
+
+    let auditor_task = {
+        let redis = redis_client.clone();
+        let auditor_store = auditor_store.clone();
+        let auditor_connect_addr = env.auditor_dkg_server_addr.clone();
+
+        task::spawn(async move {
+            if let Err(e) =
+                run_auditor_dkg_client(redis, auditor_store, id, auditor_connect_addr).await
+            {
+                error!("[CLIENT-AUDITOR] Error: {:?}", e);
+            }
+        })
+    };
+
     info!("[CLIENT] DKG + SIGN clients running concurrently...");
-    let _ = tokio::join!(dkg_task, sign_task);
+    let _ = tokio::join!(dkg_task, sign_task, auditor_task);
     Ok(())
 }
 
@@ -161,6 +178,45 @@ async fn run_sign_client(
             }
             Err(e) => error!("[CLIENT-SIGN] Signing failed: {:?}", e),
         }
+    }
+
+    Ok(())
+}
+
+async fn run_auditor_dkg_client(
+    redis_client: Arc<Client>,
+    auditor_store: store::AuditorStore,
+    id: u64,
+    auditor_connect_addr: String,
+) -> Result<()> {
+    info!("[CLIENT-AUDITOR] Subscribed to `auditor-dkg-start`");
+    let (mut pubsub, _) = redis::subscribe(&redis_client, "auditor-dkg-start").await?;
+
+    while let Some(msg) = pubsub.on_message().next().await {
+        let parsed: serde_json::Value = redis::parse(&msg)?;
+        debug!("[CLIENT-AUDITOR] Redis msg: {}", parsed);
+
+        if parsed["action"] != "start-auditor-dkg" {
+            continue;
+        }
+
+        let mint = parsed["mint"].as_str().unwrap();
+
+        info!("[CLIENT-AUDITOR] Running auditor DKG for mint {}", mint);
+
+        let keyshare = run_auditor_dkg(
+            id,
+            "0.0.0.0:0",           // unused
+            &auditor_connect_addr, // connect
+        )
+        .await?;
+
+        auditor_store
+            .write()
+            .await
+            .insert(mint.to_string(), keyshare.share);
+
+        info!("[CLIENT-AUDITOR] Stored auditor share for mint {}", mint);
     }
 
     Ok(())

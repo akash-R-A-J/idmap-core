@@ -29,6 +29,7 @@ pub struct ServerEnv {
     pub base: BaseEnv,
     pub dkg_addr: String,
     pub sign_addr: String,
+     pub auditor_dkg_addr: String,
 }
 
 impl ServerEnv {
@@ -39,6 +40,8 @@ impl ServerEnv {
                 .unwrap_or_else(|_| "0.0.0.0:7001".into()),
             sign_addr: env::var("SIGN_SERVER_ADDR")
                 .unwrap_or_else(|_| "0.0.0.0:7002".into()),
+                auditor_dkg_addr: std::env::var("AUDITOR_DKG_ADDR")
+                .unwrap_or_else(|_| "0.0.0.0:7003".into()),
         })
     }
 }
@@ -48,6 +51,7 @@ pub struct ClientEnv {
     pub base: BaseEnv,
     pub dkg_server_addr: String,
     pub sign_server_addr: String,
+    pub auditor_dkg_server_addr: String,
 }
 
 impl ClientEnv {
@@ -58,6 +62,8 @@ impl ClientEnv {
                 .unwrap_or_else(|_| "127.0.0.1:7001".into()),
             sign_server_addr: env::var("SIGN_SERVER_ADDR")
                 .unwrap_or_else(|_| "127.0.0.1:7002".into()),
+                auditor_dkg_server_addr: std::env::var("AUDITOR_DKG_ADDR")
+                .unwrap_or_else(|_| "127.0.0.1:7003".into()),
         })
     }
 }

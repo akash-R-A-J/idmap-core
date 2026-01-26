@@ -2,6 +2,11 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+use curve25519_dalek::scalar::Scalar;
+
+/// ===============================
+/// Existing signing store (UNCHANGED)
+/// ===============================
 pub type ShareStore<T> =
     Arc<RwLock<HashMap<(u64, String), T>>>;
 
@@ -23,3 +28,12 @@ pub async fn get<T: Clone>(
     let s = store.read().await;
     s.get(&(id, session.to_string())).cloned()
 }
+
+/// ===============================
+/// NEW: Auditor key store
+/// ===============================
+///
+/// mint → x_i
+///
+pub type AuditorStore =
+    Arc<RwLock<HashMap<String, Scalar>>>;

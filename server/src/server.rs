@@ -71,8 +71,23 @@ pub async fn run_server() -> Result<()> {
         })
     };
 
+    // ---- AUDITOR server task ----
+    let auditor_store: store::AuditorStore = Arc::new(Default::default());
+
+    let auditor_task = {
+        let redis = redis_client.clone();
+        let auditor_store = auditor_store.clone();
+        let auditor_bind_addr = env.auditor_dkg_addr.clone();
+
+        task::spawn(async move {
+            if let Err(e) = run_auditor_dkg_server(redis, auditor_store, id, auditor_bind_addr).await {
+                error!("[SERVER-AUDITOR] Error: {:?}", e);
+            }
+        })
+    };
+
     info!("[SERVER] Running DKG + SIGN servers concurrently...");
-    let _ = tokio::join!(dkg_task, sign_task);
+    let _ = tokio::join!(dkg_task, sign_task, auditor_task);
     Ok(())
 }
 
@@ -208,6 +223,59 @@ async fn run_sign_server(
             Ok(Err(e)) => error!("[SIGN] Signing failed: {:?}", e),
             Err(_) => error!("[SIGN] Signing timed out for session {}", session),
         }
+    }
+
+    Ok(())
+}
+
+use dkg_tcp::auditor::run_auditor_dkg;
+
+async fn run_auditor_dkg_server(
+    redis_client: Arc<Client>,
+    auditor_store: store::AuditorStore,
+    id: u64,
+    auditor_bind_addr: String,
+) -> Result<()> {
+    info!("[AUDITOR] Subscribing to `auditor-dkg-start`");
+    let (mut pubsub, mut pub_conn) = redis::subscribe(&redis_client, "auditor-dkg-start").await?;
+
+    while let Some(msg) = pubsub.on_message().next().await {
+        let parsed: serde_json::Value = redis::parse(&msg)?;
+        debug!("[AUDITOR] Redis msg: {}", parsed);
+
+        if parsed["action"] != "start-auditor-dkg" {
+            continue;
+        }
+
+        let mint = parsed["mint"].as_str().unwrap();
+
+        info!("[AUDITOR] Starting auditor DKG for mint {}", mint);
+
+        let keyshare = run_auditor_dkg(
+            id,
+            &auditor_bind_addr, // bind
+            "",                    // unused for node 0
+        )
+        .await?;
+
+        auditor_store
+            .write()
+            .await
+            .insert(mint.to_string(), keyshare.share);
+
+        redis::publish(
+            &mut pub_conn,
+            "auditor-dkg-result",
+            serde_json::json!({
+                "mint": mint,
+                "auditor_pk": bs58::encode(
+                    keyshare.public_key.compress().as_bytes()
+                ).into_string()
+            }),
+        )
+        .await?;
+
+        info!("[AUDITOR] Auditor key generated for mint {}", mint);
     }
 
     Ok(())
