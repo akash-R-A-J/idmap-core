@@ -1,7 +1,7 @@
 mod server;
 
 use anyhow::Result;
-use dkg_tcp::env_loader::init_env;
+use dkg_tcp::env::init_env;
 use tracing_subscriber::fmt;
 
 /// Entry point (only calls run_server)
